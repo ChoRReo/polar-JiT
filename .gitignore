@@ -1,0 +1,25 @@
+# Python caches and environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Training and evaluation artifacts
+checkpoints/
+outputs/
+*.pt
+*.pth
+*.safetensors
+*.npy
+train_log.jsonl
+
+# Local pretrained weights
+jit-b-16/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+._*
