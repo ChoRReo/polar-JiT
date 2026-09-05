@@ -1,0 +1,78 @@
+model:
+  image_size: 256
+  patch_size: 16
+  target_channels: 6
+  condition_channels: 3
+  hidden_size: 768
+  depth: 12
+  num_heads: 12
+  mlp_ratio: 4.0
+  bottleneck_dim: 128
+  attn_dropout: 0.0
+  proj_dropout: 0.0
+
+pretrained:
+  enabled: true
+  path: jit-b-16/checkpoint-last.pth
+  state_key: model_ema1
+
+flow:
+  p_mean: -0.8
+  p_std: 0.8
+  noise_scale: 1.0
+  t_eps: 0.05
+
+data:
+  format: unified_sfp
+  root: /home/xserver/pjt/datasets/UnifiedSfP_png
+  sources: [deepsfp, sfpuel, transsfp]
+  split: train
+  image_size: 256
+  augment: true
+
+train:
+  batch_size: 8
+  num_workers: 4
+  max_steps: 100000
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  ema_decay: 0.9999
+  amp_dtype: bfloat16
+  w_flow: 1.0
+  w_clean_l1: 0.1
+  w_dolp: 0.1
+  w_aop: 0.1
+  # Generation losses use these as relative spatial weights. The default
+  # gives object pixels 1000x the weight of background pixels.
+  object_weight: 10.0
+  background_weight: 0.01
+  log_every: 20
+  log_file: train_log.jsonl
+  save_every: 5000
+  output_dir: checkpoints/polar_jit_b16_stokes
+  seed: 42
+
+inference:
+  split: test
+  output_dir: outputs/polar_jit_b16_stokes
+  steps: 20
+  method: heun
+  max_samples: 0
+  seed: 42
+  device: cuda
+
+evaluation:
+  split: test
+  predictions: outputs/polar_jit_b16_stokes
+  output_csv: outputs/metrics/polar_jit_b16_stokes.csv
+  max_samples: 0
+  fail_on_missing: false
+  ssim_window_size: 11
+  ssim_sigma: 1.5
+  mask_threshold: 0.5
+  visualize: true
+  # Prediction-only PNGs are written under dolp/ and aop/.
+  visualization_dir: outputs/visualizations/polar_jit_b16_stokes
+  # 0 means visualize every evaluated sample.
+  max_visualizations: 0

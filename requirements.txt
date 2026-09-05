@@ -1,0 +1,7 @@
+# Install a CUDA-compatible PyTorch wheel separately when needed.
+torch>=2.2
+numpy>=1.24,<3
+pillow>=10
+pyyaml>=6
+scipy>=1.10
+safetensors>=0.4

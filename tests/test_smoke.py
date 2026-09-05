@@ -1,0 +1,44 @@
+import torch
+
+from polar_jit import ConditionalFlowMatcher, PolarJiT, s12_dolp_aop
+from polar_jit.losses import generation_weights
+from polar_jit.metrics import aop_metrics, masked_mae, masked_psnr, masked_ssim
+
+
+def test_model_and_flow_cpu():
+    model = PolarJiT(image_size=32, patch_size=8, hidden_size=64, depth=2, num_heads=4,
+                     bottleneck_dim=16)
+    flow = ConditionalFlowMatcher(model)
+    s0, target = torch.randn(2, 3, 32, 32), torch.randn(2, 6, 32, 32).clamp(-1, 1)
+    pred, velocity, velocity_target, _ = flow(target, s0)
+    assert pred["clean"].shape == target.shape == velocity.shape == velocity_target.shape
+    assert set(pred) == {"clean"}
+    (pred["clean"] - target).square().mean().backward()
+
+
+def test_stokes_dolp_aop():
+    s0 = torch.full((1, 3, 4, 4), -0.5)  # network S0=-0.5 means physical S0=0.5
+    s12 = torch.zeros(1, 6, 4, 4)
+    s12[:, :3] = 0.25
+    dolp, aop = s12_dolp_aop(s12, s0)
+    assert torch.allclose(dolp, torch.full_like(dolp, 0.5))
+    assert torch.allclose(aop, torch.zeros_like(aop))
+
+
+def test_generation_weights_prioritize_object():
+    mask = torch.tensor([[[[1.0, 0.0]]]])
+    weights = generation_weights(mask, object_weight=10.0, background_weight=0.01)
+    assert weights[0, 0, 0, 0] == 10
+    assert weights[0, 0, 0, 1] == 0.01
+
+
+def test_identity_metrics():
+    image = torch.rand(1, 1, 16, 16)
+    mask = torch.ones_like(image)
+    assert masked_mae(image, image, mask) == 0
+    assert masked_psnr(image, image, mask) >= 100
+    assert torch.allclose(masked_ssim(image, image, mask), torch.tensor(1.0), atol=1e-5)
+    metrics = aop_metrics(image, image + torch.pi, mask)
+    assert metrics["mae_deg"] < 1e-4
+    assert metrics["psnr"] >= 100
+    assert torch.allclose(metrics["ssim"], torch.tensor(1.0), atol=1e-5)
