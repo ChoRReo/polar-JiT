@@ -12,9 +12,12 @@ def s12_dolp_aop(s12: torch.Tensor, s0: torch.Tensor, eps: float = 1e-6):
     if s0.shape[-2:] != s12.shape[-2:]:
         raise ValueError("S0 and S1/S2 must have the same spatial size")
 
-    s1, s2 = s12[:, :3], s12[:, 3:]
-    amplitude = torch.sqrt((s1.square() + s2.square()).clamp_min(0))
-    s0_linear = s0.add(1).clamp(0, 2)
+    # Polarization losses are evaluated under autocast during training. Do the
+    # nonlinear conversion in float32 and smooth the norm at S1=S2=0 so the
+    # zero-initialized JiT output has a finite first-step gradient.
+    s1, s2 = s12[:, :3].float(), s12[:, 3:].float()
+    amplitude = torch.sqrt(s1.square() + s2.square() + eps**2)
+    s0_linear = s0.float().add(1).clamp(0, 2)
     dolp = (amplitude / s0_linear.clamp_min(eps)).clamp(0, 1)
     aop = 0.5 * torch.atan2(s2, s1)
     return dolp, aop

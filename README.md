@@ -69,17 +69,18 @@ python3 -m pip install -e .
 python3 scripts/train.py --config configs/polar_jit_small.yaml --device cuda
 ```
 
-默认配置会从 `jit-b-16/checkpoint-last.pth` 的 `model_ema1` 初始化兼容权重。
-官方 RGB patch embed 会额外用于初始化 S0 embedder；time embed、位置编码、
-12 个 Transformer blocks、final norm 与 final AdaLN 会按形状迁移。六通道
-S1/S2 输入首层、六通道输出层和 S0 全局池化层保持任务专用初始化。设置
-`pretrained.enabled: false` 可从头训练。
+默认配置设置为 `pretrained.enabled: false`，模型全部参数随机初始化并从头训练，
+不会读取本地 JiT-B/16 checkpoint。这里保留 JiT-B/16 的模型结构，但不使用其
+预训练参数。
 
 训练会保存可恢复的 `.pt` checkpoint 和只包含 EMA 模型的
 `model_ema.safetensors`。当前入口是单 GPU 版本，结构本身兼容后续 DDP 封装。
 监控信息会同时打印到终端并追加保存至输出目录下的 `train_log.jsonl`。每条训练
 记录包含当前/总 epoch、epoch 内 batch、当前/总 step、学习率及各项 loss；断点
 恢复后 epoch 会根据已完成 step 连续计算。日志文件名可通过 `train.log_file` 修改。
+DoLP/AoP 辅助损失在零初始化的 `S1=S2=0` 处采用平滑 Stokes 向量形式，避免
+`sqrt(0)` 与 `atan2(0,0)` 的未定义梯度；若仍出现非有限 loss 或梯度，训练会立即
+停止并将具体错误项写入日志，防止继续保存已污染的权重。
 
 ## 推理
 

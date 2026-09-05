@@ -12,9 +12,7 @@ model:
   proj_dropout: 0.0
 
 pretrained:
-  enabled: true
-  path: jit-b-16/checkpoint-last.pth
-  state_key: model_ema1
+  enabled: false
 
 flow:
   p_mean: -0.8

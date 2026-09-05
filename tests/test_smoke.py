@@ -1,7 +1,7 @@
 import torch
 
 from polar_jit import ConditionalFlowMatcher, PolarJiT, s12_dolp_aop
-from polar_jit.losses import generation_weights
+from polar_jit.losses import generation_weights, reconstruction_losses
 from polar_jit.metrics import aop_metrics, masked_mae, masked_psnr, masked_ssim
 
 
@@ -30,6 +30,20 @@ def test_generation_weights_prioritize_object():
     weights = generation_weights(mask, object_weight=10.0, background_weight=0.01)
     assert weights[0, 0, 0, 0] == 10
     assert weights[0, 0, 0, 1] == 0.01
+
+
+def test_polarization_losses_have_finite_gradient_at_zero_prediction():
+    prediction = torch.zeros(2, 6, 8, 8, requires_grad=True)
+    target = torch.rand_like(prediction).mul(2).sub(1)
+    s0 = torch.zeros(2, 3, 8, 8)
+    weights = torch.ones(2, 1, 8, 8)
+
+    losses = reconstruction_losses(prediction, target, s0, weights)
+    sum(losses).backward()
+
+    assert all(torch.isfinite(loss) for loss in losses)
+    assert prediction.grad is not None
+    assert torch.isfinite(prediction.grad).all()
 
 
 def test_identity_metrics():

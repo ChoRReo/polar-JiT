@@ -36,6 +36,23 @@ def write_train_log(path: Path, run_id: str, payload: dict):
         handle.write(line + "\n")
 
 
+def require_finite_losses(log_path, run_id, step, losses):
+    nonfinite = [name for name, value in losses.items() if not torch.isfinite(value).all()]
+    if not nonfinite:
+        return
+    write_train_log(
+        log_path,
+        run_id,
+        {
+            "event": "nonfinite_loss",
+            "step": step,
+            "components": nonfinite,
+            "values": {name: float(value.detach().float().cpu()) for name, value in losses.items()},
+        },
+    )
+    raise FloatingPointError(f"non-finite training loss at step {step}: {nonfinite}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/polar_jit_small.yaml")
@@ -151,8 +168,37 @@ def main():
             loss = (train_cfg["w_flow"] * loss_flow
                     + train_cfg["w_clean_l1"] * clean_l1
                     + train_cfg["w_dolp"] * dolp + train_cfg["w_aop"] * aop)
-        optimizer.zero_grad(set_to_none=True); loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), float(train_cfg.get("grad_clip", 1)))
+        require_finite_losses(
+            log_path,
+            run_id,
+            step + 1,
+            {
+                "total": loss,
+                "flow": loss_flow,
+                "clean_l1": clean_l1,
+                "dolp": dolp,
+                "aop": aop,
+            },
+        )
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        try:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                float(train_cfg.get("grad_clip", 1)),
+                error_if_nonfinite=True,
+            )
+        except RuntimeError as error:
+            write_train_log(
+                log_path,
+                run_id,
+                {
+                    "event": "nonfinite_gradient",
+                    "step": step + 1,
+                    "error": str(error),
+                },
+            )
+            raise
         optimizer.step(); step += 1
         decay = float(train_cfg.get("ema_decay", 0.9999))
         with torch.no_grad():
@@ -173,6 +219,7 @@ def main():
                     "step": step,
                     "max_steps": max_steps,
                     "learning_rate": optimizer.param_groups[0]["lr"],
+                    "grad_norm": grad_norm.item(),
                     "total": loss.item(),
                     "flow": loss_flow.item(),
                     "clean_l1": clean_l1.item(),
