@@ -8,7 +8,9 @@ venv/
 
 # Training and evaluation artifacts
 checkpoints/
+visualizations/
 outputs/
+test_gt/
 *.pt
 *.pth
 *.safetensors

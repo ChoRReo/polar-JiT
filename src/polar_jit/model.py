@@ -169,6 +169,22 @@ class FinalLayer(nn.Module):
         return self.linear(modulate(self.norm_final(x), shift, scale))
 
 
+class ResidualRefinementHead(nn.Module):
+    """Mix neighboring output pixels while preserving JiT's initial prediction."""
+
+    def __init__(self, channels: int, hidden_channels: int):
+        super().__init__()
+        if hidden_channels < 1:
+            raise ValueError("refiner hidden channels must be positive")
+        self.in_conv = nn.Conv2d(channels, hidden_channels, kernel_size=3, padding=1)
+        self.activation = nn.SiLU()
+        self.out_conv = nn.Conv2d(hidden_channels, channels, kernel_size=3, padding=1)
+
+    def forward(self, image):
+        residual = self.out_conv(self.activation(self.in_conv(image)))
+        return image + residual
+
+
 class PolarJiT(nn.Module):
     """JiT-B/16 backbone with spatial and global S0 conditioning."""
 
@@ -183,6 +199,7 @@ class PolarJiT(nn.Module):
         num_heads=12,
         mlp_ratio=4.0,
         bottleneck_dim=128,
+        refiner_hidden_channels=64,
         attn_dropout=0.0,
         proj_dropout=0.0,
     ):
@@ -222,6 +239,7 @@ class PolarJiT(nn.Module):
             ]
         )
         self.final_layer = FinalLayer(hidden_size, patch_size, target_channels)
+        self.refiner = ResidualRefinementHead(target_channels, refiner_hidden_channels)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -241,6 +259,10 @@ class PolarJiT(nn.Module):
         nn.init.zeros_(self.final_layer.adaLN_modulation[-1].bias)
         nn.init.zeros_(self.final_layer.linear.weight)
         nn.init.zeros_(self.final_layer.linear.bias)
+        # The refiner starts as an exact identity mapping. It can then learn
+        # cross-patch corrections without perturbing JiT's zero-output init.
+        nn.init.zeros_(self.refiner.out_conv.weight)
+        nn.init.zeros_(self.refiner.out_conv.bias)
 
     def unpatchify(self, tokens):
         batch, count, _ = tokens.shape
@@ -263,4 +285,5 @@ class PolarJiT(nn.Module):
         for block in self.blocks:
             x = block(x, condition, self.rope)
         clean = self.unpatchify(self.final_layer(x, condition))
+        clean = self.refiner(clean)
         return {"clean": clean}

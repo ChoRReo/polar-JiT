@@ -10,6 +10,71 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 
+def _resize_tensor(tensor: torch.Tensor, image_size: int, mode: str) -> torch.Tensor:
+    args = {"size": (int(image_size), int(image_size)), "mode": mode}
+    if mode != "nearest":
+        args["align_corners"] = False
+    return F.interpolate(tensor[None], **args)[0]
+
+
+def load_polarization_image(path, polarization_bits: int, image_size: int) -> torch.Tensor:
+    """Load one analyzer image as resized RGB in [0,1]."""
+    bits = int(polarization_bits)
+    if bits < 1:
+        raise ValueError("polarization_bits must be positive")
+    with Image.open(path) as image:
+        arr = np.asarray(image).copy()
+    arr = arr.astype(np.float32) / float((1 << bits) - 1)
+    if arr.ndim == 2:
+        arr = np.repeat(arr[..., None], 3, axis=2)
+    elif arr.ndim == 3 and arr.shape[2] >= 3:
+        arr = arr[..., :3]
+    else:
+        raise ValueError(f"unsupported polarization image shape in {path}: {arr.shape}")
+    tensor = torch.from_numpy(arr).permute(2, 0, 1)
+    return _resize_tensor(tensor, image_size, "bilinear").clamp(0, 1)
+
+
+def load_mask_image(path, image_size: int) -> torch.Tensor:
+    """Load a foreground mask as [1,H,W] with binary values."""
+    with Image.open(path) as image:
+        arr = np.asarray(image.convert("L")).copy()
+    tensor = torch.from_numpy((arr > 0).astype(np.float32))[None]
+    return _resize_tensor(tensor, image_size, "nearest")
+
+
+def analyzer_images_to_stokes(i0, i45, i90, i135):
+    """Convert normalized analyzer images to network S0 and target S1/S2."""
+    if not (i0.shape == i45.shape == i90.shape == i135.shape):
+        raise ValueError("all analyzer images must have the same shape")
+    s0_physical = ((i0 + i90) + (i45 + i135)) * 0.5
+    s12 = torch.cat((i0 - i90, i45 - i135), dim=0).clamp(-1, 1)
+    return s0_physical.clamp(0, 2).sub(1).float(), s12.float()
+
+
+def load_stokes_scene(
+    pol_000,
+    pol_045,
+    pol_090,
+    pol_135,
+    polarization_bits: int,
+    image_size: int,
+    mask=None,
+):
+    """Load a four-analyzer scene and return S0, S1/S2 and object mask."""
+    images = [
+        load_polarization_image(path, polarization_bits, image_size)
+        for path in (pol_000, pol_045, pol_090, pol_135)
+    ]
+    s0, s12 = analyzer_images_to_stokes(*images)
+    object_mask = (
+        load_mask_image(mask, image_size)
+        if mask is not None
+        else torch.ones(1, int(image_size), int(image_size))
+    )
+    return s0, s12, object_mask.float()
+
+
 class UnifiedSfPDataset(Dataset):
     """Independent reader for the existing UnifiedSfP manifest convention."""
 
@@ -61,34 +126,20 @@ class UnifiedSfPDataset(Dataset):
         """Return an identifier without loading the sample's image files."""
         return self.rows[index]["sample_id"]
 
-    def _resize(self, x, mode):
-        args = {"size": (self.image_size, self.image_size), "mode": mode}
-        if mode != "nearest":
-            args["align_corners"] = False
-        return F.interpolate(x[None], **args)[0]
-
     def _polar(self, row, key):
-        with Image.open(self.root / row[key]) as image:
-            arr = np.asarray(image).copy()
-        scale = float((1 << int(row["polarization_bits"])) - 1)
-        arr = arr.astype(np.float32) / scale
-        if arr.ndim == 2:
-            arr = np.repeat(arr[..., None], 3, axis=2)
-        tensor = torch.from_numpy(arr).permute(2, 0, 1)
-        return self._resize(tensor, "bilinear").clamp(0, 1)
+        return load_polarization_image(
+            self.root / row[key], row["polarization_bits"], self.image_size
+        )
 
     def _mask(self, row):
-        with Image.open(self.root / row["mask"]) as image:
-            arr = np.asarray(image.convert("L")).copy()
-        return self._resize(torch.from_numpy((arr > 0).astype(np.float32))[None], "nearest")
+        return load_mask_image(self.root / row["mask"], self.image_size)
 
     def __getitem__(self, index):
         row = self.rows[index]
         keys = ("pol_000", "pol_045", "pol_090", "pol_135")
         i0, i45, i90, i135 = [self._polar(row, key) for key in keys]
         mask = self._mask(row)
-        s0 = ((i0 + i90) + (i45 + i135)) * 0.5
-        s12 = torch.cat((i0 - i90, i45 - i135), dim=0).clamp(-1, 1)
+        s0, s12 = analyzer_images_to_stokes(i0, i45, i90, i135)
         if self.augment and torch.rand(()) < 0.5:
             # Horizontal reflection changes the image-frame handedness: S2
             # changes sign while S0 and S1 do not.
@@ -97,9 +148,7 @@ class UnifiedSfPDataset(Dataset):
         return {
             "name": self.sample_name(index),
             "source": row.get("source", "unknown"),
-            # Physical S0 is in [0, 2]; subtracting one puts all network-space
-            # Stokes components in [-1, 1] without changing their common scale.
-            "s0": s0.clamp(0, 2).sub(1).float(),
+            "s0": s0,
             "s12": s12.float(),
             "mask": mask.float(),
         }

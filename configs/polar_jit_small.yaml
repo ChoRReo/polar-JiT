@@ -8,6 +8,8 @@ model:
   num_heads: 12
   mlp_ratio: 4.0
   bottleneck_dim: 128
+  # Residual 3x3 convolutional head mixes pixels across B/16 boundaries.
+  refiner_hidden_channels: 64
   attn_dropout: 0.0
   proj_dropout: 0.0
 
@@ -39,8 +41,11 @@ train:
   amp_dtype: bfloat16
   w_flow: 1.0
   w_clean_l1: 0.1
-  w_dolp: 0.1
-  w_aop: 0.1
+  w_gradient_l1: 0.1
+  w_dolp_l1: 0.1
+  w_aop_l1: 0.1
+  # S1/S2 gradient errors crossing a 16x16 patch boundary receive this boost.
+  gradient_patch_boundary_weight: 4.0
   # Generation losses use these as relative spatial weights. The default
   # gives object pixels 1000x the weight of background pixels.
   object_weight: 10.0
@@ -60,8 +65,13 @@ inference:
   seed: 42
   device: cuda
 
+single_scene:
+  output_dir: outputs/single_scene
+  polarization_bits: 8
+
 evaluation:
   split: test
+  gt_dir: test_gt
   predictions: outputs/polar_jit_b16_stokes
   output_csv: outputs/metrics/polar_jit_b16_stokes.csv
   max_samples: 0

@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from polar_jit.data import UnifiedSfPDataset
+from polar_jit.data import UnifiedSfPDataset, load_stokes_scene
 
 
 def _save_rgb(path, value):
@@ -55,6 +55,18 @@ def test_dataset_builds_stokes_without_normal_columns(tmp_path):
     assert torch.allclose(sample["s12"][:3], torch.full((3, 4, 4), 128 / 255))
     assert torch.count_nonzero(sample["s12"][3:]) == 0
     assert torch.all(sample["mask"] == 1)
+
+    scene_s0, scene_s12, scene_mask = load_stokes_scene(
+        tmp_path / "i0.png",
+        tmp_path / "i45.png",
+        tmp_path / "i90.png",
+        tmp_path / "i135.png",
+        polarization_bits=8,
+        image_size=4,
+    )
+    assert torch.equal(scene_s0, sample["s0"])
+    assert torch.equal(scene_s12, sample["s12"])
+    assert torch.all(scene_mask == 1)
 
 
 def test_test_split_contains_deepsfp_test_and_supplement(tmp_path):

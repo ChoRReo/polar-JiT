@@ -11,13 +11,18 @@ import numpy as np
 import torch
 import yaml
 
-from polar_jit import build_dataset, evaluate_stokes_prediction
+from polar_jit import build_dataset, evaluate_stokes_prediction, load_scene_bundle
 from polar_jit.visualization import save_prediction_visualizations
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/polar_jit_small.yaml")
+    parser.add_argument(
+        "--scene-dir",
+        default=None,
+        help="Evaluate one bundle produced by scripts/infer_scene.py.",
+    )
     parser.add_argument("--predictions", default=None)
     parser.add_argument("--output-csv", default=None)
     parser.add_argument("--split", default=None, choices=("train", "test"))
@@ -33,9 +38,22 @@ def main():
     args = parser.parse_args()
     config = yaml.safe_load(Path(args.config).read_text())
     eval_cfg = config.get("evaluation", {})
-    predictions = Path(args.predictions or eval_cfg.get("predictions", "outputs/polar_jit"))
-    output = Path(args.output_csv or eval_cfg.get("output_csv", "outputs/metrics.csv"))
-    dataset = build_dataset(config, args.split or eval_cfg.get("split", "test"))
+    scene_dir = Path(args.scene_dir) if args.scene_dir else None
+    if scene_dir is not None and args.predictions is not None:
+        parser.error("--scene-dir and --predictions cannot be used together")
+    predictions = (
+        None
+        if scene_dir is not None
+        else Path(args.predictions or eval_cfg.get("predictions", "outputs/polar_jit"))
+    )
+    output = Path(
+        args.output_csv
+        or (
+            scene_dir / "metrics.csv"
+            if scene_dir
+            else eval_cfg.get("output_csv", "outputs/metrics.csv")
+        )
+    )
     window_size = int(eval_cfg.get("ssim_window_size", 11))
     sigma = float(eval_cfg.get("ssim_sigma", 1.5))
     threshold = float(eval_cfg.get("mask_threshold", 0.5))
@@ -52,7 +70,11 @@ def main():
     visualize = bool(eval_cfg.get("visualize", True)) and not args.no_visualize
     visualization_dir = Path(
         args.visualization_dir
-        or eval_cfg.get("visualization_dir", "outputs/visualizations/polar_jit")
+        or (
+            scene_dir / "visualizations"
+            if scene_dir
+            else eval_cfg.get("visualization_dir", "outputs/visualizations/polar_jit")
+        )
     )
     max_visualizations = (
         args.max_visualizations
@@ -69,22 +91,41 @@ def main():
         parser.error("sample limits cannot be negative")
     rows = []
     visualized = 0
-    count = len(dataset) if max_samples == 0 else min(len(dataset), max_samples)
-    entries = []
-    missing = []
-    for index in range(count):
-        name = dataset.sample_name(index)
-        path = predictions / Path(name).with_suffix(".npy")
-        (entries if path.is_file() else missing).append((index, path))
-    if missing and fail_on_missing:
-        preview = ", ".join(str(path) for _, path in missing[:3])
-        raise FileNotFoundError(f"missing {len(missing)} prediction files, including: {preview}")
-    if missing:
-        warnings.warn(f"skipped {len(missing)} samples without prediction files", stacklevel=1)
+    scene_bundle = load_scene_bundle(scene_dir) if scene_dir is not None else None
+    if scene_bundle is not None:
+        count, missing, entries = 1, [], [(None, None)]
+        dataset = None
+    else:
+        dataset = build_dataset(config, args.split or eval_cfg.get("split", "test"))
+        count = len(dataset) if max_samples == 0 else min(len(dataset), max_samples)
+        entries = []
+        missing = []
+        for index in range(count):
+            name = dataset.sample_name(index)
+            path = predictions / Path(name).with_suffix(".npy")
+            (entries if path.is_file() else missing).append((index, path))
+        if missing and fail_on_missing:
+            preview = ", ".join(str(path) for _, path in missing[:3])
+            raise FileNotFoundError(
+                f"missing {len(missing)} prediction files, including: {preview}"
+            )
+        if missing:
+            warnings.warn(
+                f"skipped {len(missing)} samples without prediction files", stacklevel=1
+            )
 
     for index, path in entries:
-        sample = dataset[index]
-        pred = torch.from_numpy(np.load(path, allow_pickle=False)).float()
+        if scene_bundle is not None:
+            sample = {
+                "name": scene_bundle["name"],
+                "s0": scene_bundle["s0"],
+                "s12": scene_bundle["target"],
+                "mask": scene_bundle["mask"],
+            }
+            pred = scene_bundle["prediction"]
+        else:
+            sample = dataset[index]
+            pred = torch.from_numpy(np.load(path, allow_pickle=False)).float()
         if pred.shape != (6, *sample["s0"].shape[-2:]):
             raise ValueError(f"invalid S1/S2 shape in {path}: {tuple(pred.shape)}")
         pred = pred[None]
@@ -124,6 +165,7 @@ def main():
     print(
         json.dumps(
             {
+                "mode": "single_scene" if scene_dir else "dataset",
                 "metrics_csv": str(output),
                 "requested_samples": count,
                 "evaluated_samples": len(rows),

@@ -8,15 +8,18 @@ RGB Stokes 分量 `[S1, S2]`，不依赖 Stable Diffusion、VAE 或 ControlNet�
 ```text
 S0 ──► B/16 condition patch embed ──────────┐
        ├─ spatial token addition             ▼
-       └─ global pool ──► AdaLN condition ─► 12-block JiT-B/16 ─► clean S1/S2
-time ──► timestep embed ────────────────┘             ▲
-noise ──► S1/S2 linear flow ─► B/16 patch embed ─────┘
+       └─ global pool ──► AdaLN condition ─► 12-block JiT-B/16 ─► unpatchify
+time ──► timestep embed ────────────────┘             ▲                    │
+noise ──► S1/S2 linear flow ─► B/16 patch embed ─────┘                     ▼
+                                            residual 3x3 refiner ─► clean S1/S2
 ```
 
 - 主干按官方 JiT-B/16 设置为 patch 16、hidden 768、12 blocks、12 heads 和
   bottleneck 128，并采用 RMSNorm、QK-Norm、2D RoPE、SwiGLU 与 AdaLN-Zero。
 - 训练路径为 `x_t = t*[S1,S2] + (1-t)*noise`；网络预测 clean S1/S2，并换算为速度场损失。
 - S0 patch token 逐位置注入生成 token，并在全局池化后用于调制所有 JiT block。
+- unpatchify 后的零初始化残差卷积头跨 patch 融合相邻像素；初始化时是严格恒等映射，
+  不改变 JiT 的零输出初始化。
 - 推理只读取 S0，通过 Euler 或 Heun ODE 积分生成 S1/S2。
 
 该实现根据 [LTH14/JiT](https://github.com/LTH14/JiT) 的公开 MIT 实现重新组织。
@@ -78,9 +81,13 @@ PYTHONPATH=src python3 scripts/train.py --config configs/polar_jit_small.yaml --
 监控信息会同时打印到终端并追加保存至输出目录下的 `train_log.jsonl`。每条训练
 记录包含当前/总 epoch、epoch 内 batch、当前/总 step、学习率及各项 loss；断点
 恢复后 epoch 会根据已完成 step 连续计算。日志文件名可通过 `train.log_file` 修改。
-DoLP/AoP 辅助损失在零初始化的 `S1=S2=0` 处采用平滑 Stokes 向量形式，避免
-`sqrt(0)` 与 `atan2(0,0)` 的未定义梯度；若仍出现非有限 loss 或梯度，训练会立即
-停止并将具体错误项写入日志，防止继续保存已污染的权重。
+训练损失由 flow MSE、S1/S2 clean L1、S1/S2 空间梯度 L1、DoLP L1 和 AoP L1
+组成。梯度损失对跨越 16×16 patch 边界的误差额外加权，以直接抑制块状接缝；
+DoLP/AoP 均由预测与 GT 的 S1/S2 动态计算。AoP L1 使用周期为 π 的最短角距离，
+并按 GT DoLP 加权；在 `S1=S2=0` 的无偏振位置停止未定义的角度梯度，从而避免
+`atan2(0,0)` 导致 NaN。各项权重及 patch 边界倍率均由 YAML 的 `train` 段控制。
+若仍出现非有限 loss 或梯度，训练会立即停止并将具体错误项写入日志，防止继续
+保存已污染的权重。
 
 ## 推理
 
@@ -104,7 +111,59 @@ python3 scripts/infer.py \
   --steps 40 --method heun --max-samples 100
 ```
 
+### 单场景四方向推理
+
+对于不在 manifest 中的单个场景，可以直接提供四张偏振方向图像：
+
+```bash
+PYTHONPATH=src python3 scripts/infer_scene.py \
+  --config configs/polar_jit_small.yaml \
+  --checkpoint checkpoints/polar_jit_b16_stokes/model_ema.safetensors \
+  --pol-000 /path/to/I0.png \
+  --pol-045 /path/to/I45.png \
+  --pol-090 /path/to/I90.png \
+  --pol-135 /path/to/I135.png \
+  --mask /path/to/mask.png \
+  --polarization-bits 8 \
+  --name my_scene \
+  --output-dir outputs/single_scene/my_scene
+```
+
+四张图会按训练数据的相同规则缩放到 `model.image_size × model.image_size`，再
+转换为 S0、S1、S2。`--mask` 可省略，此时整幅图均视为前景。输出目录包含：
+
+```text
+prediction_s12.npy  # 模型预测，[6,H,W]
+target_s12.npy      # 四方向图计算的 GT，[6,H,W]
+s0.npy              # 网络空间 S0，[3,H,W]
+mask.npy            # 评估 mask，[1,H,W]
+scene.json           # 场景和采样参数
+```
+
+随后直接用同一个评估脚本输出单场景指标和预测 DoLP/AoP 图：
+
+```bash
+PYTHONPATH=src python3 scripts/evaluate.py \
+  --config configs/polar_jit_small.yaml \
+  --scene-dir outputs/single_scene/my_scene
+```
+
+默认生成 `metrics.csv`、`visualizations/dolp/my_scene.png` 和
+`visualizations/aop/my_scene.png`。也可以通过 `--output-csv`、
+`--visualization-dir` 或 `--no-visualize` 覆盖。
+
 ## 评估
+
+导出当前测试集的数值 GT 和 DoLP/AoP 可视化到仓库根目录：
+
+```bash
+PYTHONPATH=src python3 scripts/export_test_gt.py \
+  --config configs/polar_jit_small.yaml
+```
+
+默认输出到 `test_gt/`：`s12/` 中是 `[S1_RGB,S2_RGB]` float32 NPY，`dolp/`
+和 `aop/` 中是仅显示 mask 内目标的 PNG，`manifest.csv` 记录所有对应路径。
+输出目录可通过 `evaluation.gt_dir` 或 `--output-dir` 修改。
 
 ```bash
 PYTHONPATH=src python3 scripts/evaluate.py \

@@ -162,12 +162,21 @@ def main():
                 background_weight=float(train_cfg.get("background_weight", 0.0)),
             )
             loss_flow = masked_mean((v_pred - v_target).square(), spatial_weights)
-            clean_l1, dolp, aop = reconstruction_losses(
-                pred["clean"], target, batch["s0"], spatial_weights
+            clean_l1, gradient_l1, dolp_l1, aop_l1 = reconstruction_losses(
+                pred["clean"],
+                target,
+                batch["s0"],
+                spatial_weights,
+                patch_size=int(config["model"]["patch_size"]),
+                patch_boundary_weight=float(
+                    train_cfg.get("gradient_patch_boundary_weight", 4.0)
+                ),
             )
             loss = (train_cfg["w_flow"] * loss_flow
                     + train_cfg["w_clean_l1"] * clean_l1
-                    + train_cfg["w_dolp"] * dolp + train_cfg["w_aop"] * aop)
+                    + train_cfg.get("w_gradient_l1", 0.1) * gradient_l1
+                    + train_cfg.get("w_dolp_l1", train_cfg.get("w_dolp", 0.1)) * dolp_l1
+                    + train_cfg.get("w_aop_l1", train_cfg.get("w_aop", 0.1)) * aop_l1)
         require_finite_losses(
             log_path,
             run_id,
@@ -176,8 +185,9 @@ def main():
                 "total": loss,
                 "flow": loss_flow,
                 "clean_l1": clean_l1,
-                "dolp": dolp,
-                "aop": aop,
+                "gradient_l1": gradient_l1,
+                "dolp_l1": dolp_l1,
+                "aop_l1": aop_l1,
             },
         )
         optimizer.zero_grad(set_to_none=True)
@@ -223,8 +233,9 @@ def main():
                     "total": loss.item(),
                     "flow": loss_flow.item(),
                     "clean_l1": clean_l1.item(),
-                    "dolp": dolp.item(),
-                    "aop": aop.item(),
+                    "gradient_l1": gradient_l1.item(),
+                    "dolp_l1": dolp_l1.item(),
+                    "aop_l1": aop_l1.item(),
                 },
             )
         if step % save_every == 0 or step == max_steps:
