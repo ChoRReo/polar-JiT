@@ -66,7 +66,7 @@ python3 -m pip install -e .
 ## 训练
 
 ```bash
-python3 scripts/train.py --config configs/polar_jit_small.yaml --device cuda
+PYTHONPATH=src python3 scripts/train.py --config configs/polar_jit_small.yaml --device cuda
 ```
 
 默认配置设置为 `pretrained.enabled: false`，模型全部参数随机初始化并从头训练，
@@ -85,7 +85,7 @@ DoLP/AoP 辅助损失在零初始化的 `S1=S2=0` 处采用平滑 Stokes 向量�
 ## 推理
 
 ```bash
-python3 scripts/infer.py \
+PYTHONPATH=src python3 scripts/infer.py \
   --config configs/polar_jit_small.yaml \
   --checkpoint checkpoints/polar_jit_b16_stokes/model_ema.safetensors
 ```
@@ -107,7 +107,7 @@ python3 scripts/infer.py \
 ## 评估
 
 ```bash
-python3 scripts/evaluate.py \
+PYTHONPATH=src python3 scripts/evaluate.py \
   --config configs/polar_jit_small.yaml
 ```
 
