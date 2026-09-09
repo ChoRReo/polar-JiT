@@ -11,15 +11,16 @@ S0 ──► B/16 condition patch embed ──────────┐
        └─ global pool ──► AdaLN condition ─► 12-block JiT-B/16 ─► unpatchify
 time ──► timestep embed ────────────────┘             ▲                    │
 noise ──► S1/S2 linear flow ─► B/16 patch embed ─────┘                     ▼
-                                            residual 3x3 refiner ─► clean S1/S2
+                  full-resolution S0 ─────► residual 3x3 refiner ─► clean S1/S2
 ```
 
 - 主干按官方 JiT-B/16 设置为 patch 16、hidden 768、12 blocks、12 heads 和
   bottleneck 128，并采用 RMSNorm、QK-Norm、2D RoPE、SwiGLU 与 AdaLN-Zero。
 - 训练路径为 `x_t = t*[S1,S2] + (1-t)*noise`；网络预测 clean S1/S2，并换算为速度场损失。
 - S0 patch token 逐位置注入生成 token，并在全局池化后用于调制所有 JiT block。
-- unpatchify 后的零初始化残差卷积头跨 patch 融合相邻像素；初始化时是严格恒等映射，
-  不改变 JiT 的零输出初始化。
+- unpatchify 后的零初始化残差卷积头跨 patch 融合相邻像素，并直接读取全分辨率
+  S0 以恢复 patch embedding 中损失的局部纹理；初始化时是严格恒等映射，不改变
+  JiT 的零输出初始化。
 - 推理只读取 S0，通过 Euler 或 Heun ODE 积分生成 S1/S2。
 
 该实现根据 [LTH14/JiT](https://github.com/LTH14/JiT) 的公开 MIT 实现重新组织。
@@ -81,8 +82,9 @@ PYTHONPATH=src python3 scripts/train.py --config configs/polar_jit_small.yaml --
 监控信息会同时打印到终端并追加保存至输出目录下的 `train_log.jsonl`。每条训练
 记录包含当前/总 epoch、epoch 内 batch、当前/总 step、学习率及各项 loss；断点
 恢复后 epoch 会根据已完成 step 连续计算。日志文件名可通过 `train.log_file` 修改。
-训练损失由 flow MSE、S1/S2 clean L1、S1/S2 空间梯度 L1、DoLP L1 和 AoP L1
-组成。梯度损失对跨越 16×16 patch 边界的误差额外加权，以直接抑制块状接缝；
+训练损失由 flow MSE、S1/S2 clean L1、S1/S2 空间梯度 L1、多尺度高频 L1、
+DoLP L1 和 AoP L1 组成。梯度损失对跨越 16×16 patch 边界的误差额外加权，
+以直接抑制块状接缝；3×3 和 7×7 高通残差监督用于恢复细节与中尺度纹理。
 DoLP/AoP 均由预测与 GT 的 S1/S2 动态计算。AoP L1 使用周期为 π 的最短角距离，
 并按 GT DoLP 加权；在 `S1=S2=0` 的无偏振位置停止未定义的角度梯度，从而避免
 `atan2(0,0)` 导致 NaN。各项权重及 patch 边界倍率均由 YAML 的 `train` 段控制。

@@ -1,7 +1,12 @@
 import torch
 
 from polar_jit import ConditionalFlowMatcher, PolarJiT, s12_dolp_aop
-from polar_jit.losses import generation_weights, reconstruction_losses, spatial_gradient_l1
+from polar_jit.losses import (
+    generation_weights,
+    high_frequency_l1,
+    reconstruction_losses,
+    spatial_gradient_l1,
+)
 from polar_jit.metrics import aop_metrics, masked_mae, masked_psnr, masked_ssim
 
 
@@ -27,7 +32,8 @@ def test_refiner_starts_as_identity():
         refiner_hidden_channels=12,
     )
     image = torch.randn(1, 6, 16, 16)
-    assert torch.equal(model.refiner(image), image)
+    s0 = torch.randn(1, 3, 16, 16)
+    assert torch.equal(model.refiner(image, s0), image)
 
 
 def test_stokes_dolp_aop():
@@ -79,7 +85,7 @@ def test_aop_l1_uses_shortest_pi_periodic_distance():
     )
     s0 = torch.zeros(1, 3, 2, 2)
     weights = torch.ones(1, 1, 2, 2)
-    _, _, _, aop_l1 = reconstruction_losses(prediction, target, s0, weights)
+    _, _, _, _, aop_l1 = reconstruction_losses(prediction, target, s0, weights)
     assert torch.allclose(aop_l1, torch.deg2rad(torch.tensor(2.0)), atol=1e-5)
 
 
@@ -95,6 +101,16 @@ def test_gradient_l1_emphasizes_patch_boundaries():
         prediction, target, weights, patch_size=2, patch_boundary_weight=4
     )
     assert emphasized > regular
+
+
+def test_high_frequency_l1_detects_missing_texture():
+    target = torch.tensor(
+        [[[[(-1.0) ** (x + y) for x in range(8)] for y in range(8)]]]
+    ).expand(1, 6, 8, 8)
+    smooth = torch.zeros_like(target)
+    weights = torch.ones(1, 1, 8, 8)
+    assert high_frequency_l1(target, target, weights) == 0
+    assert high_frequency_l1(smooth, target, weights) > 0
 
 
 def test_identity_metrics():

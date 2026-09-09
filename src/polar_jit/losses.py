@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 from .polarization import s12_dolp_aop
 
@@ -65,6 +66,40 @@ def spatial_gradient_l1(
     return 0.5 * (loss_x + loss_y)
 
 
+def high_frequency_l1(clean, target, weights, kernel_sizes=(3, 7)):
+    """Match local high-pass S1/S2 content at multiple spatial scales."""
+    if not kernel_sizes:
+        raise ValueError("at least one high-frequency kernel size is required")
+    clean, target, weights = clean.float(), target.float(), weights.float()
+    losses = []
+    for kernel_size in kernel_sizes:
+        kernel_size = int(kernel_size)
+        if kernel_size < 3 or kernel_size % 2 == 0:
+            raise ValueError("high-frequency kernel sizes must be odd integers >= 3")
+        padding = kernel_size // 2
+
+        def high_pass(image):
+            padded = F.pad(
+                image,
+                (padding, padding, padding, padding),
+                mode="replicate",
+            )
+            low_frequency = F.avg_pool2d(padded, kernel_size, stride=1)
+            return image - low_frequency
+
+        # Local minimum weighting suppresses neighborhoods crossing the
+        # object/background contour so silhouette edges do not dominate.
+        local_weights = -F.max_pool2d(
+            -weights,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=padding,
+        )
+        error = (high_pass(clean) - high_pass(target)).abs()
+        losses.append(masked_mean(error, local_weights))
+    return torch.stack(losses).mean()
+
+
 def _stable_aop(s12, eps=1e-4):
     """Compute AoP without differentiating atan2 at an unpolarized vector."""
     s1, s2 = s12[:, :3].float(), s12[:, 3:].float()
@@ -81,6 +116,7 @@ def reconstruction_losses(
     weights,
     patch_size=16,
     patch_boundary_weight=4.0,
+    high_frequency_kernel_sizes=(3, 7),
 ):
     l1 = masked_mean((clean - target).abs(), weights)
     gradient_l1 = spatial_gradient_l1(
@@ -89,6 +125,12 @@ def reconstruction_losses(
         weights,
         patch_size=patch_size,
         patch_boundary_weight=patch_boundary_weight,
+    )
+    frequency_l1 = high_frequency_l1(
+        clean,
+        target,
+        weights,
+        kernel_sizes=high_frequency_kernel_sizes,
     )
     pred_dolp, _ = s12_dolp_aop(clean, s0)
     gt_dolp, _ = s12_dolp_aop(target, s0)
@@ -106,4 +148,4 @@ def reconstruction_losses(
     gt_confidence = (gt_amplitude / gt_intensity).clamp(0, 1).detach()
     aop_weights = weights.float() * gt_confidence
     aop_l1 = masked_mean(aop_delta.abs(), aop_weights)
-    return l1, gradient_l1, dolp_l1, aop_l1
+    return l1, gradient_l1, frequency_l1, dolp_l1, aop_l1

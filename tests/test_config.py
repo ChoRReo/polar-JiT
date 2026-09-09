@@ -11,6 +11,7 @@ def test_inference_and_evaluation_paths_are_connected():
     assert config["model"]["target_channels"] == 6
     assert config["model"]["refiner_hidden_channels"] > 0
     assert config["train"]["w_gradient_l1"] > 0
+    assert config["train"]["w_high_frequency_l1"] > 0
     assert config["train"]["w_dolp_l1"] > 0
     assert config["train"]["w_aop_l1"] > 0
     assert config["inference"]["split"] == config["evaluation"]["split"] == "test"

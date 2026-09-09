@@ -8,7 +8,7 @@ model:
   num_heads: 12
   mlp_ratio: 4.0
   bottleneck_dim: 128
-  # Residual 3x3 convolutional head mixes pixels across B/16 boundaries.
+  # Residual head mixes B/16 outputs and reads full-resolution S0 detail.
   refiner_hidden_channels: 64
   attn_dropout: 0.0
   proj_dropout: 0.0
@@ -42,8 +42,11 @@ train:
   w_flow: 1.0
   w_clean_l1: 0.1
   w_gradient_l1: 0.1
+  w_high_frequency_l1: 0.1
   w_dolp_l1: 0.1
   w_aop_l1: 0.1
+  # Local high-pass texture supervision at fine and medium spatial scales.
+  high_frequency_kernel_sizes: [3, 7]
   # S1/S2 gradient errors crossing a 16x16 patch boundary receive this boost.
   gradient_patch_boundary_weight: 4.0
   # Generation losses use these as relative spatial weights. The default

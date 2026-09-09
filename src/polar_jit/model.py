@@ -170,18 +170,24 @@ class FinalLayer(nn.Module):
 
 
 class ResidualRefinementHead(nn.Module):
-    """Mix neighboring output pixels while preserving JiT's initial prediction."""
+    """Recover local detail from full-resolution S0 and mix across patch borders."""
 
-    def __init__(self, channels: int, hidden_channels: int):
+    def __init__(self, channels: int, condition_channels: int, hidden_channels: int):
         super().__init__()
         if hidden_channels < 1:
             raise ValueError("refiner hidden channels must be positive")
         self.in_conv = nn.Conv2d(channels, hidden_channels, kernel_size=3, padding=1)
+        self.condition_conv = nn.Conv2d(
+            condition_channels, hidden_channels, kernel_size=3, padding=1
+        )
         self.activation = nn.SiLU()
         self.out_conv = nn.Conv2d(hidden_channels, channels, kernel_size=3, padding=1)
 
-    def forward(self, image):
-        residual = self.out_conv(self.activation(self.in_conv(image)))
+    def forward(self, image, condition):
+        if image.shape[0] != condition.shape[0] or image.shape[-2:] != condition.shape[-2:]:
+            raise ValueError("refiner image and condition must have matching batch/spatial size")
+        features = self.in_conv(image) + self.condition_conv(condition)
+        residual = self.out_conv(self.activation(features))
         return image + residual
 
 
@@ -239,7 +245,9 @@ class PolarJiT(nn.Module):
             ]
         )
         self.final_layer = FinalLayer(hidden_size, patch_size, target_channels)
-        self.refiner = ResidualRefinementHead(target_channels, refiner_hidden_channels)
+        self.refiner = ResidualRefinementHead(
+            target_channels, condition_channels, refiner_hidden_channels
+        )
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -285,5 +293,5 @@ class PolarJiT(nn.Module):
         for block in self.blocks:
             x = block(x, condition, self.rope)
         clean = self.unpatchify(self.final_layer(x, condition))
-        clean = self.refiner(clean)
+        clean = self.refiner(clean, s0)
         return {"clean": clean}
