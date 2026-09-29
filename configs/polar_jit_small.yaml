@@ -49,10 +49,7 @@ train:
   high_frequency_kernel_sizes: [3, 7]
   # S1/S2 gradient errors crossing a 16x16 patch boundary receive this boost.
   gradient_patch_boundary_weight: 4.0
-  # Generation losses use these as relative spatial weights. The default
-  # gives object pixels 1000x the weight of background pixels.
-  object_weight: 10.0
-  background_weight: 0.01
+  # Every training loss is evaluated only inside the object mask.
   log_every: 200
   log_file: train_log.jsonl
   save_every: 50000

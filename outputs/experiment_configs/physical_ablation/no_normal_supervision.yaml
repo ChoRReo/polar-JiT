@@ -39,8 +39,6 @@ train:
   w_clean_l1: 0.1
   w_dolp: 0.1
   w_aop: 0.1
-  object_weight: 10.0
-  background_weight: 0.01
   log_every: 20
   save_every: 5000
   output_dir: checkpoints/experiments/physical_ablation/no_normal_supervision

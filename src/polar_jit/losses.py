@@ -12,14 +12,9 @@ def masked_mean(value, mask, eps=1e-6):
     return (value * mask).sum() / mask.sum().clamp_min(eps)
 
 
-def generation_weights(mask, object_weight=1.0, background_weight=0.0):
-    """Build relative spatial weights for generation losses."""
-    if object_weight < 0 or background_weight < 0:
-        raise ValueError("object_weight and background_weight must be non-negative")
-    if object_weight == 0 and background_weight == 0:
-        raise ValueError("at least one spatial weight must be positive")
-    foreground = mask.float().clamp(0, 1)
-    return foreground * object_weight + (1 - foreground) * background_weight
+def generation_weights(mask):
+    """Use the object mask directly; background pixels have zero loss weight."""
+    return mask.float().clamp(0, 1)
 
 
 def spatial_gradient_l1(

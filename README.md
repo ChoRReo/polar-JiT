@@ -57,9 +57,8 @@ RGB 通道上共同取平均。
 /home/xserver/pjt/datasets/UnifiedSfP_png
 ```
 
-训练参数均由 `configs/polar_jit_small.yaml` 管理。`train.object_weight` 与
-`train.background_weight` 控制生成损失的空间权重；默认前景与背景之比为
-`10:0.01`，重点生成 mask 中的 object，背景仅保留极弱约束。
+训练参数均由 `configs/polar_jit_small.yaml` 管理。所有训练损失直接使用 object
+mask：mask 内权重为 1，mask 外权重为 0，背景不参与优化。
 
 ## 安装
 

@@ -156,11 +156,7 @@ def main():
         target = batch["s12"]
         with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
             pred, v_pred, v_target, _ = flow(target, batch["s0"])
-            spatial_weights = generation_weights(
-                batch["mask"],
-                object_weight=float(train_cfg.get("object_weight", 1.0)),
-                background_weight=float(train_cfg.get("background_weight", 0.0)),
-            )
+            spatial_weights = generation_weights(batch["mask"])
             loss_flow = masked_mean((v_pred - v_target).square(), spatial_weights)
             clean_l1, gradient_l1, frequency_l1, dolp_l1, aop_l1 = (
                 reconstruction_losses(

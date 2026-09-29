@@ -45,11 +45,11 @@ def test_stokes_dolp_aop():
     assert torch.allclose(aop, torch.zeros_like(aop))
 
 
-def test_generation_weights_prioritize_object():
+def test_generation_weights_exclude_background():
     mask = torch.tensor([[[[1.0, 0.0]]]])
-    weights = generation_weights(mask, object_weight=10.0, background_weight=0.01)
-    assert weights[0, 0, 0, 0] == 10
-    assert weights[0, 0, 0, 1] == 0.01
+    weights = generation_weights(mask)
+    assert weights[0, 0, 0, 0] == 1
+    assert weights[0, 0, 0, 1] == 0
 
 
 def test_polarization_losses_have_finite_gradient_at_zero_prediction():
