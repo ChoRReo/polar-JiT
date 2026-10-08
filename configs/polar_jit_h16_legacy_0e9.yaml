@@ -1,0 +1,52 @@
+# Compatibility configuration for an uncommitted H/16 training run based on
+# commit 0e9be44b6169a7d48da052c9ca6a591813623b7b.
+model:
+  image_size: 256
+  patch_size: 16
+  target_channels: 6
+  condition_channels: 3
+  hidden_size: 1280
+  depth: 32
+  num_heads: 16
+  mlp_ratio: 4.0
+  bottleneck_dim: 256
+  refiner_hidden_channels: 64
+  attn_dropout: 0.0
+  proj_dropout: 0.0
+
+flow:
+  p_mean: -0.8
+  p_std: 0.8
+  noise_scale: 1.0
+  t_eps: 0.05
+
+data:
+  format: unified_sfp
+  root: ../datasets/UnifiedSfP_png
+  sources: [deepsfp, sfpuel, transsfp]
+  split: test
+  image_size: 256
+  augment: false
+
+inference:
+  split: test
+  output_dir: outputs/polar_jit_h16_legacy_0e9
+  steps: 20
+  method: heun
+  max_samples: 0
+  seed: 42
+  device: cuda
+
+evaluation:
+  split: test
+  gt_dir: test_gt
+  predictions: outputs/polar_jit_h16_legacy_0e9
+  output_csv: outputs/metrics/polar_jit_h16_legacy_0e9.csv
+  max_samples: 0
+  fail_on_missing: false
+  ssim_window_size: 11
+  ssim_sigma: 1.5
+  mask_threshold: 0.5
+  visualize: true
+  visualization_dir: outputs/visualizations/polar_jit_h16_legacy_0e9
+  max_visualizations: 0

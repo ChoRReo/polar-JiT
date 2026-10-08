@@ -234,6 +234,29 @@ PYTHONPATH=src python3 scripts/train_oracle_mgt_ratio.py \
 ratio 数据目标为 `[S1_RGB/S0_RGB,S2_RGB/S0_RGB]`；其 DoLP 直接由 ratio
 幅值计算，不会再次除以 S0。
 
+## 旧 0e9 H/16 checkpoint 测试
+
+曾在提交 `0e9be44b6169a7d48da052c9ca6a591813623b7b` 基础上手工放大到 H/16
+训练的 checkpoint，不能直接载入当前 `PolarJiT`：旧结构没有 32 个 in-context
+tokens，refiner 也只有 `Conv-SiLU-Conv`，不含当前的全分辨率 S0 条件卷积。
+
+专用兼容入口保持旧参数名称和前向结构，同时将模型尺寸设为 H/16：
+
+```bash
+PYTHONPATH=src python3 scripts/infer_legacy_h16.py \
+  --config configs/polar_jit_h16_legacy_0e9.yaml \
+  --checkpoint /path/to/checkpoint-STEP.pt
+
+PYTHONPATH=src python3 scripts/evaluate.py \
+  --config configs/polar_jit_h16_legacy_0e9.yaml
+```
+
+也支持旧的 `model_ema.safetensors`。对于 `.pt` 文件，推理脚本优先读取 checkpoint
+内保存的 `config.model` 尺寸；对于不含配置的 safetensors，如果当时手工修改的
+H/16 参数与 YAML 不同，脚本会报告从权重形状识别出的结构，按报告调整 legacy
+YAML 即可。旧模型预测的是原始 `S1,S2`，因此使用普通 `evaluate.py`，不是 ratio
+评估入口。
+
 ## Oracle m_gt 条件实验
 
 `configs/polar_jit_h16_oracle_mgt.yaml` 启用法向量与偏振 GT 构造的 7 通道条件：
