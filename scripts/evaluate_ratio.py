@@ -11,13 +11,15 @@ import numpy as np
 import torch
 import yaml
 
-from polar_jit import build_dataset, evaluate_stokes_prediction, load_scene_bundle
-from polar_jit.visualization import save_prediction_visualizations
+from polar_jit import load_scene_bundle
+from polar_jit.ratio_data import build_ratio_dataset
+from polar_jit.ratio_evaluation import evaluate_ratio_prediction
+from polar_jit.ratio_visualization import save_prediction_visualizations
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/polar_jit_h16.yaml")
+    parser.add_argument("--config", default="configs/polar_jit_h16_ratio.yaml")
     parser.add_argument(
         "--scene-dir",
         default=None,
@@ -96,7 +98,7 @@ def main():
         count, missing, entries = 1, [], [(None, None)]
         dataset = None
     else:
-        dataset = build_dataset(config, args.split or eval_cfg.get("split", "test"))
+        dataset = build_ratio_dataset(config, args.split or eval_cfg.get("split", "test"))
         count = len(dataset) if max_samples == 0 else min(len(dataset), max_samples)
         entries = []
         missing = []
@@ -127,11 +129,11 @@ def main():
             sample = dataset[index]
             pred = torch.from_numpy(np.load(path, allow_pickle=False)).float()
         if pred.shape != (6, *sample["s0"].shape[-2:]):
-            raise ValueError(f"invalid S1/S2 shape in {path}: {tuple(pred.shape)}")
+            raise ValueError(f"invalid normalized S1/S0,S2/S0 shape in {path}: {tuple(pred.shape)}")
         pred = pred[None]
         target = sample["s12"][None]
         mask = (sample["mask"][None] >= threshold).float()
-        metrics = evaluate_stokes_prediction(
+        metrics = evaluate_ratio_prediction(
             pred,
             target,
             sample["s0"][None],

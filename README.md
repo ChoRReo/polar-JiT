@@ -1,31 +1,33 @@
 # Polar JiT Flow
 
-一个独立的、像素空间的偏振恢复项目。模型以 RGB `S0` 为条件，直接生成
+一个独立的、像素空间的偏振恢复项目。默认模型以 RGB `S0` 为条件，直接生成
 RGB Stokes 分量 `[S1, S2]`，不依赖 Stable Diffusion、VAE 或 ControlNet。
+`S1/S0,S2/S0` 作为独立 `_ratio` 实验保留，不会覆盖默认数据或脚本。
 
 ## 架构
 
 ```text
-S0 ──► B/16 condition patch embed ──────────┐
+S0 ──► H/16 condition patch embed ──────────┐
        ├─ spatial token addition             ▼
-       └─ global pool ──► AdaLN condition ─► 12-block JiT-B/16 ─► unpatchify
+       └─ global pool ──► AdaLN condition ─► 32-block JiT-H/16 ─► unpatchify
 time ──► timestep embed ────────────────┘             ▲                    │
-noise ──► S1/S2 linear flow ─► B/16 patch embed ─────┘                     ▼
-                  full-resolution S0 ─────► residual 3x3 refiner ─► clean S1/S2
+noise ──► S1,S2 flow ─► H/16 patch embed ─────────────────────────────────┘
+                  full-resolution S0 ─────► residual 3x3 refiner ─► clean S1,S2
 ```
 
-- 主干按官方 JiT-B/16 设置为 patch 16、hidden 768、12 blocks、12 heads 和
-  bottleneck 128，并采用 RMSNorm、QK-Norm、2D RoPE、SwiGLU 与 AdaLN-Zero。
-- 训练路径为 `x_t = t*[S1,S2] + (1-t)*noise`；网络预测 clean S1/S2，并换算为速度场损失。
+- 主干按官方 JiT-H/16 设置为 patch 16、hidden 1280、32 blocks、16 heads 和
+  bottleneck 256，并采用 RMSNorm、QK-Norm、2D RoPE、SwiGLU 与 AdaLN-Zero。
+- 默认训练路径为 `x_t = t*[S1,S2] + (1-t)*noise`；网络预测 clean Stokes，并换算为速度场损失。
 - S0 patch token 逐位置注入生成 token，并在全局池化后用于调制所有 JiT block。
 - unpatchify 后的零初始化残差卷积头跨 patch 融合相邻像素，并直接读取全分辨率
   S0 以恢复 patch embedding 中损失的局部纹理；初始化时是严格恒等映射，不改变
   JiT 的零输出初始化。
-- 推理只读取 S0，通过 Euler 或 Heun ODE 积分生成 S1/S2。
+- 推理只读取 S0，通过 Euler 或 Heun ODE 积分生成 `S1,S2`。
 
 该实现根据 [LTH14/JiT](https://github.com/LTH14/JiT) 的公开 MIT 实现重新组织。
-保留官方 B/16 主干形式，但将 ImageNet 类别条件替换为当前的 S0 空间条件与
-全局 AdaLN 条件，不引入类别 embedding、CFG 或官方的 class in-context tokens。
+保留官方 H/16 主干形式，但将 ImageNet 类别条件替换为当前的 S0 空间条件与
+全局 AdaLN 条件；官方在第 10 个 block 注入的 32 个 class in-context tokens
+相应替换为 S0 全局条件 tokens，不引入类别 embedding 或 CFG。
 
 ## 数据
 
@@ -44,11 +46,10 @@ S1 = I0 - I90
 S2 = I45 - I135
 ```
 
-分析器图像归一化到 `[0,1]` 后，物理 `S0` 位于 `[0,2]`，`S1/S2` 位于
-`[-1,1]`。送入网络前只对 S0 执行 `S0_net=S0-1`，使输入与输出均位于
-`[-1,1]`，同时保持三个 Stokes 分量的共同强度尺度。模型条件为
-`S0_net [3,H,W]`，生成目标为 `[S1_RGB,S2_RGB] [6,H,W]`。
-DoLP 与 AoP 按 RGB 通道直接由 Stokes 定义计算，最终指标在前景像素和
+分析器图像归一化到 `[0,1]` 后，物理 `S0` 位于 `[0,2]`。送入网络前对 S0
+执行 `S0_net=S0-1`；默认生成目标是裁剪到 `[-1,1]` 的
+`[S1_RGB,S2_RGB] [6,H,W]`。DoLP 为 `sqrt(S1^2+S2^2)/S0`，AoP 为
+`0.5*atan2(S2,S1)`。最终指标在前景像素和
 RGB 通道上共同取平均。
 
 默认配置已经指向：
@@ -57,7 +58,7 @@ RGB 通道上共同取平均。
 /home/xserver/pjt/datasets/UnifiedSfP_png
 ```
 
-训练参数均由 `configs/polar_jit_small.yaml` 管理。所有训练损失直接使用 object
+训练参数均由 `configs/polar_jit_h16.yaml` 管理。所有训练损失直接使用 object
 mask：mask 内权重为 1，mask 外权重为 0，背景不参与优化。
 
 ## 安装
@@ -69,11 +70,11 @@ python3 -m pip install -e .
 ## 训练
 
 ```bash
-PYTHONPATH=src python3 scripts/train.py --config configs/polar_jit_small.yaml --device cuda
+PYTHONPATH=src python3 scripts/train.py --config configs/polar_jit_h16.yaml --device cuda
 ```
 
 默认配置设置为 `pretrained.enabled: false`，模型全部参数随机初始化并从头训练，
-不会读取本地 JiT-B/16 checkpoint。这里保留 JiT-B/16 的模型结构，但不使用其
+不会读取本地 JiT-H/16 checkpoint。这里保留 JiT-H/16 的模型结构，但不使用其
 预训练参数。
 
 训练会保存可恢复的 `.pt` checkpoint 和只包含 EMA 模型的
@@ -81,10 +82,10 @@ PYTHONPATH=src python3 scripts/train.py --config configs/polar_jit_small.yaml --
 监控信息会同时打印到终端并追加保存至输出目录下的 `train_log.jsonl`。每条训练
 记录包含当前/总 epoch、epoch 内 batch、当前/总 step、学习率及各项 loss；断点
 恢复后 epoch 会根据已完成 step 连续计算。日志文件名可通过 `train.log_file` 修改。
-训练损失由 flow MSE、S1/S2 clean L1、S1/S2 空间梯度 L1、多尺度高频 L1、
+训练损失由 flow MSE、Stokes 分量 clean L1、空间梯度 L1、多尺度高频 L1、
 DoLP L1 和 AoP L1 组成。梯度损失对跨越 16×16 patch 边界的误差额外加权，
 以直接抑制块状接缝；3×3 和 7×7 高通残差监督用于恢复细节与中尺度纹理。
-DoLP/AoP 均由预测与 GT 的 S1/S2 动态计算。AoP L1 使用周期为 π 的最短角距离，
+DoLP/AoP 均由预测与 GT 的 `S1,S2` 动态计算。AoP L1 使用周期为 π 的最短角距离，
 并按 GT DoLP 加权；在 `S1=S2=0` 的无偏振位置停止未定义的角度梯度，从而避免
 `atan2(0,0)` 导致 NaN。各项权重及 patch 边界倍率均由 YAML 的 `train` 段控制。
 若仍出现非有限 loss 或梯度，训练会立即停止并将具体错误项写入日志，防止继续
@@ -94,21 +95,21 @@ DoLP/AoP 均由预测与 GT 的 S1/S2 动态计算。AoP L1 使用周期为 π �
 
 ```bash
 PYTHONPATH=src python3 scripts/infer.py \
-  --config configs/polar_jit_small.yaml \
-  --checkpoint checkpoints/polar_jit_b16_stokes/model_ema.safetensors
+  --config configs/polar_jit_h16.yaml \
+  --checkpoint checkpoints/polar_jit_h16_stokes/model_ema.safetensors
 ```
 
 预测文件为 `[6,H,W]` 的 float32 NPY，通道顺序是
-`[S1_R,S1_G,S1_B,S2_R,S2_G,S2_B]`。DoLP 和 AoP 不作为生成通道，而是在
-损失与评估阶段由 S0/S1/S2 动态计算。
+`[S1_R,S1_G,S1_B,S2_R,S2_G,S2_B]`。
+DoLP 和 AoP 不作为生成通道，而是在损失与评估阶段由 S0 与 Stokes 分量动态计算。
 
 推理的 `split`、输出目录、采样步数、Euler/Heun 方法、最大样本数、随机种子和
 设备默认从 YAML 的 `inference` 段读取，也可用同名命令行参数临时覆盖。例如：
 
 ```bash
 python3 scripts/infer.py \
-  --config configs/polar_jit_small.yaml \
-  --checkpoint checkpoints/polar_jit_b16_stokes/model_ema.safetensors \
+  --config configs/polar_jit_h16.yaml \
+  --checkpoint checkpoints/polar_jit_h16_stokes/model_ema.safetensors \
   --steps 40 --method heun --max-samples 100
 ```
 
@@ -118,8 +119,8 @@ python3 scripts/infer.py \
 
 ```bash
 PYTHONPATH=src python3 scripts/infer_scene.py \
-  --config configs/polar_jit_small.yaml \
-  --checkpoint checkpoints/polar_jit_b16_stokes/model_ema.safetensors \
+  --config configs/polar_jit_h16.yaml \
+  --checkpoint checkpoints/polar_jit_h16_stokes/model_ema.safetensors \
   --pol-000 /path/to/I0.png \
   --pol-045 /path/to/I45.png \
   --pol-090 /path/to/I90.png \
@@ -134,8 +135,8 @@ PYTHONPATH=src python3 scripts/infer_scene.py \
 转换为 S0、S1、S2。`--mask` 可省略，此时整幅图均视为前景。输出目录包含：
 
 ```text
-prediction_s12.npy  # 模型预测，[6,H,W]
-target_s12.npy      # 四方向图计算的 GT，[6,H,W]
+prediction_s12.npy  # 模型预测的 S1,S2，[6,H,W]
+target_s12.npy      # 四方向图计算的 S1,S2 GT，[6,H,W]
 s0.npy              # 网络空间 S0，[3,H,W]
 mask.npy            # 评估 mask，[1,H,W]
 scene.json           # 场景和采样参数
@@ -145,7 +146,7 @@ scene.json           # 场景和采样参数
 
 ```bash
 PYTHONPATH=src python3 scripts/evaluate.py \
-  --config configs/polar_jit_small.yaml \
+  --config configs/polar_jit_h16.yaml \
   --scene-dir outputs/single_scene/my_scene
 ```
 
@@ -159,7 +160,7 @@ PYTHONPATH=src python3 scripts/evaluate.py \
 
 ```bash
 PYTHONPATH=src python3 scripts/export_test_gt.py \
-  --config configs/polar_jit_small.yaml
+  --config configs/polar_jit_h16.yaml
 ```
 
 默认输出到 `test_gt/`：`s12/` 中是 `[S1_RGB,S2_RGB]` float32 NPY，`dolp/`
@@ -168,7 +169,7 @@ PYTHONPATH=src python3 scripts/export_test_gt.py \
 
 ```bash
 PYTHONPATH=src python3 scripts/evaluate.py \
-  --config configs/polar_jit_small.yaml
+  --config configs/polar_jit_h16.yaml
 ```
 
 当前评估只统计 object mask 内的指标，输出：
@@ -192,8 +193,8 @@ DoLP 热力图，`aop/<sample>.png` 是预测 AoP 周期色相图。不再输出
 
 ```bash
 python3 scripts/evaluate.py \
-  --config configs/polar_jit_small.yaml \
-  --predictions outputs/polar_jit_b16_stokes \
+  --config configs/polar_jit_h16.yaml \
+  --predictions outputs/polar_jit_h16_stokes \
   --output-csv outputs/metrics/experiment.csv \
   --visualization-dir outputs/visualizations/experiment \
   --max-visualizations 50 --fail-on-missing
@@ -202,6 +203,58 @@ python3 scripts/evaluate.py \
 使用 `--no-visualize` 可只计算 CSV 指标。评估结束后，终端还会输出 JSON 汇总，
 包括样本数、缺失预测数、可视化数和六项平均指标。
 
+## 独立 S1/S0、S2/S0 实验
+
+归一化目标使用独立的数据类、损失、评估、可视化、配置和入口；默认脚本仍保持
+原始 `S1,S2` 语义。两套实验的 checkpoint、预测、GT、指标和可视化目录也彼此隔离。
+
+```bash
+# 普通 S0 条件
+PYTHONPATH=src python3 scripts/train_ratio.py \
+  --config configs/polar_jit_h16_ratio.yaml --device cuda
+
+PYTHONPATH=src python3 scripts/infer_ratio.py \
+  --config configs/polar_jit_h16_ratio.yaml \
+  --checkpoint checkpoints/polar_jit_h16_stokes_ratio/model_ema.safetensors
+
+PYTHONPATH=src python3 scripts/export_test_gt_ratio.py \
+  --config configs/polar_jit_h16_ratio.yaml
+
+PYTHONPATH=src python3 scripts/evaluate_ratio.py \
+  --config configs/polar_jit_h16_ratio.yaml
+```
+
+单场景入口为 `scripts/infer_scene_ratio.py`。Oracle ratio 实验使用：
+
+```bash
+PYTHONPATH=src python3 scripts/train_oracle_mgt_ratio.py \
+  --config configs/polar_jit_h16_oracle_mgt_ratio.yaml --device cuda
+```
+
+ratio 数据目标为 `[S1_RGB/S0_RGB,S2_RGB/S0_RGB]`；其 DoLP 直接由 ratio
+幅值计算，不会再次除以 S0。
+
+## Oracle m_gt 条件实验
+
+`configs/polar_jit_h16_oracle_mgt.yaml` 启用法向量与偏振 GT 构造的 7 通道条件：
+
+```text
+[S0_R, S0_G, S0_B, theta/pi, cos(2phi), sin(2phi), m_gt]
+```
+
+其中 `phi=atan2(ny,nx)`，并按 Oracle 验证计划计算
+`m_gt=C_gt*cos(2phi)-S_gt*sin(2phi)`。`C_gt/S_gt` 来自 RGB 平均后的标量
+`S1,S2` 方向。除 S0 外的几何通道在 object mask 外置零。该条件在推理时仍需要
+normal GT 和 polarization GT，因此仅用于验证 reflection prior，不是可部署输入。
+
+```bash
+PYTHONPATH=src python3 scripts/train_oracle_mgt.py --device cuda
+
+PYTHONPATH=src python3 scripts/infer.py \
+  --config configs/polar_jit_h16_oracle_mgt.yaml \
+  --checkpoint checkpoints/polar_jit_h16_oracle_mgt/model_ema.safetensors
+```
+
 ## 测试
 
 ```bash
@@ -209,20 +262,20 @@ python3 -m pip install -e '.[dev]'
 pytest -q
 ```
 
-测试覆盖 S0/S1/S2 数据转换、模型与 flow 的前向/反向、mask 前景加权、DoLP/AoP
+测试覆盖默认 S1/S2 与独立 ratio 数据转换、模型与 flow 的前向/反向、mask 前景加权、DoLP/AoP
 指标、AoP 跨 ±90° 边界的周期误差，以及 DoLP/AoP PNG 的尺寸和格式。
 
 ## 推荐实验顺序
 
 1. 比较 Euler 10/20 步和 Heun 10/20 步。
-2. 比较载入官方 B/16 权重与从头训练。
+2. 比较载入官方 H/16 权重与从头训练。
 3. 比较 S0 空间 token 注入与仅使用全局 AdaLN condition。
 
 ## 与旧项目的主要区别
 
 | 项目 | 旧方案 | 本项目 |
 |---|---|---|
-| 生成空间 | SD VAE latent | 原始 S1/S2 Stokes 像素空间 |
+| 生成空间 | SD VAE latent | 像素空间 S1、S2（可选独立 ratio 实验） |
 | 主干 | 12 通道 SD1.5 UNet | JiT |
 | 条件网络 | ControlNet | S0 patch embedding |
 | 训练目标 | DDPM noise prediction | Flow Matching velocity |

@@ -10,12 +10,13 @@ import torch
 import yaml
 from safetensors.torch import load_file
 
-from polar_jit import ConditionalFlowMatcher, PolarJiT, build_dataset
+from polar_jit import ConditionalFlowMatcher, PolarJiT
+from polar_jit.ratio_data import build_ratio_dataset
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/polar_jit_h16.yaml")
+    parser.add_argument("--config", default="configs/polar_jit_h16_ratio.yaml")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--split", default=None, choices=("train", "test"))
@@ -56,7 +57,7 @@ def main():
         model.load_state_dict(state.get("ema", state.get("model", state)))
     model.eval()
     flow = ConditionalFlowMatcher(model, **config["flow"])
-    dataset = build_dataset(config, split=split)
+    dataset = build_ratio_dataset(config, split=split)
     count = len(dataset) if max_samples == 0 else min(len(dataset), max_samples)
     for index in range(count):
         sample = dataset[index]

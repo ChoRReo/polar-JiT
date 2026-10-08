@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from polar_jit.data import UnifiedSfPDataset, load_stokes_scene
+from polar_jit.data import UnifiedSfPDataset, load_stokes_scene, oracle_mgt_condition
 
 
 def _save_rgb(path, value):
@@ -103,3 +103,28 @@ def test_test_split_contains_deepsfp_test_and_supplement(tmp_path):
     dataset = UnifiedSfPDataset(tmp_path, split="test", image_size=4, augment=False)
 
     assert [row["sample_id"] for row in dataset.rows] == ["main", "supp"]
+
+
+def test_oracle_mgt_condition_uses_plan_sign_and_seven_channels():
+    s0 = torch.zeros(3, 2, 2)
+    s12 = torch.zeros(6, 2, 2)
+    s12[:3] = 1
+    normal = torch.zeros(3, 2, 2)
+    normal[0] = 1  # phi=0, theta=pi/2
+    mask = torch.ones(1, 2, 2)
+
+    oracle = oracle_mgt_condition(s0, s12, normal, mask)
+
+    assert oracle["condition"].shape == (7, 2, 2)
+    assert torch.allclose(oracle["theta"], torch.full((1, 2, 2), 0.5))
+    assert torch.allclose(oracle["cos2phi"], torch.ones(1, 2, 2))
+    assert torch.allclose(oracle["sin2phi"], torch.zeros(1, 2, 2))
+    assert torch.allclose(oracle["mgt"], torch.ones(1, 2, 2))
+
+    # For phi=pi/4 and a pure +S2 direction, the plan's minus sign gives -1.
+    diagonal = torch.full((2, 2), 2**-0.5)
+    normal[0], normal[1] = diagonal, diagonal
+    s12[:3].zero_()
+    s12[3:] = 1
+    oracle = oracle_mgt_condition(s0, s12, normal, mask)
+    assert torch.allclose(oracle["mgt"], -torch.ones(1, 2, 2), atol=1e-6)

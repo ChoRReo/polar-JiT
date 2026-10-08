@@ -5,8 +5,8 @@ from pathlib import Path
 import torch
 
 
-def load_official_jit_b16(model, checkpoint_path, state_key="model_ema1"):
-    """Load shape-compatible official JiT-B/16 weights into PolarJiT.
+def load_official_jit_h16(model, checkpoint_path, state_key="model_ema1"):
+    """Load shape-compatible official JiT-H/16 weights into PolarJiT.
 
     The official RGB input embedder is also copied into the S0 embedder. The
     task-specific six-channel flow input and output projections remain newly

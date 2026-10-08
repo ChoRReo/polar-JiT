@@ -3,12 +3,14 @@ model:
   patch_size: 16
   target_channels: 6
   condition_channels: 3
-  hidden_size: 768
-  depth: 12
-  num_heads: 12
+  hidden_size: 1280
+  depth: 32
+  num_heads: 16
   mlp_ratio: 4.0
-  bottleneck_dim: 128
-  # Residual head mixes B/16 outputs and reads full-resolution S0 detail.
+  bottleneck_dim: 256
+  in_context_len: 32
+  in_context_start: 10
+  # Residual head mixes H/16 outputs and reads full-resolution S0 detail.
   refiner_hidden_channels: 64
   attn_dropout: 0.0
   proj_dropout: 0.0
@@ -47,18 +49,18 @@ train:
   w_aop_l1: 0.1
   # Local high-pass texture supervision at fine and medium spatial scales.
   high_frequency_kernel_sizes: [3, 7]
-  # S1/S2 gradient errors crossing a 16x16 patch boundary receive this boost.
+  # S1/S0,S2/S0 gradient errors crossing a patch boundary receive this boost.
   gradient_patch_boundary_weight: 4.0
   # Every training loss is evaluated only inside the object mask.
   log_every: 200
   log_file: train_log.jsonl
   save_every: 50000
-  output_dir: checkpoints/polar_jit_b16_stokes
+  output_dir: checkpoints/polar_jit_h16_stokes_ratio
   seed: 42
 
 inference:
   split: test
-  output_dir: outputs/polar_jit_b16_stokes
+  output_dir: outputs/polar_jit_h16_stokes_ratio
   steps: 20
   method: heun
   max_samples: 0
@@ -71,9 +73,9 @@ single_scene:
 
 evaluation:
   split: test
-  gt_dir: test_gt
-  predictions: outputs/polar_jit_b16_stokes
-  output_csv: outputs/metrics/polar_jit_b16_stokes.csv
+  gt_dir: test_gt_ratio
+  predictions: outputs/polar_jit_h16_stokes_ratio
+  output_csv: outputs/metrics/polar_jit_h16_stokes_ratio.csv
   max_samples: 0
   fail_on_missing: false
   ssim_window_size: 11
@@ -81,6 +83,6 @@ evaluation:
   mask_threshold: 0.5
   visualize: true
   # Prediction-only PNGs are written under dolp/ and aop/.
-  visualization_dir: outputs/visualizations/polar_jit_b16_stokes
+  visualization_dir: outputs/visualizations/polar_jit_h16_stokes_ratio
   # 0 means visualize every evaluated sample.
   max_visualizations: 0

@@ -15,13 +15,14 @@ from polar_jit import (
     load_stokes_scene,
     save_scene_bundle,
 )
+from polar_jit.ratio_data import raw_s12_to_ratio
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Infer S1/S2 for one scene from four analyzer images."
+        description="Infer S1/S0,S2/S0 for one scene from analyzer images."
     )
-    parser.add_argument("--config", default="configs/polar_jit_h16.yaml")
+    parser.add_argument("--config", default="configs/polar_jit_h16_ratio.yaml")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--pol-000", required=True)
     parser.add_argument("--pol-045", required=True)
@@ -67,6 +68,7 @@ def main():
         image_size=image_size,
         mask=args.mask,
     )
+    target = raw_s12_to_ratio(s0, target)
 
     model = PolarJiT(**config["model"]).to(device)
     checkpoint = Path(args.checkpoint)
@@ -112,7 +114,7 @@ def main():
                 "prediction_npy": str(paths["prediction"]),
                 "target_npy": str(paths["target"]),
                 "evaluate": (
-                    "PYTHONPATH=src python3 scripts/evaluate.py "
+                    "PYTHONPATH=src python3 scripts/evaluate_ratio.py "
                     f"--config {args.config} --scene-dir {output}"
                 ),
             },

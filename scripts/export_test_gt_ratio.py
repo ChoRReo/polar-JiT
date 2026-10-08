@@ -47,9 +47,14 @@ def stokes_from_analyzers(images):
         values = zip(i0[channel], i45[channel], i90[channel], i135[channel])
         s0, s1, s2 = [], [], []
         for value_0, value_45, value_90, value_135 in values:
-            s0.append(min(2.0, max(0.0, ((value_0 + value_90) + (value_45 + value_135)) * 0.5)))
-            s1.append(min(1.0, max(-1.0, value_0 - value_90)))
-            s2.append(min(1.0, max(-1.0, value_45 - value_135)))
+            intensity = min(
+                2.0,
+                max(0.0, ((value_0 + value_90) + (value_45 + value_135)) * 0.5),
+            )
+            denominator = max(intensity, 1e-6)
+            s0.append(intensity)
+            s1.append(min(1.0, max(-1.0, (value_0 - value_90) / denominator)))
+            s2.append(min(1.0, max(-1.0, (value_45 - value_135) / denominator)))
         s0_channels.append(s0)
         s12_channels.append(s1)
         s12_channels.append(s2)
@@ -123,7 +128,7 @@ def save_dolp_aop(paths, s0_channels, s12_channels, mask, image_size):
             s1 = s12_channels[channel][index]
             s2 = s12_channels[channel + 3][index]
             amplitude = math.sqrt(s1 * s1 + s2 * s2 + 1e-12)
-            dolp_values.append(min(1.0, amplitude / max(s0_channels[channel][index], 1e-6)))
+            dolp_values.append(min(1.0, amplitude))
             angles.append(0.5 * math.atan2(s2, s1))
         dolp_pixels.append(heatmap(sum(dolp_values) / 3))
         sin_mean = sum(math.sin(2 * angle) for angle in angles) / 3
@@ -154,9 +159,9 @@ def select_rows(config):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Export test-set S1/S2 GT and DoLP/AoP visualizations."
+        description="Export test-set S1/S0,S2/S0 GT and DoLP/AoP visualizations."
     )
-    parser.add_argument("--config", default="configs/polar_jit_h16.yaml")
+    parser.add_argument("--config", default="configs/polar_jit_h16_ratio.yaml")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--no-visualize", action="store_true")

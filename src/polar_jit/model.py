@@ -45,9 +45,9 @@ def rotate_half(x):
 
 
 class RotaryEmbedding2D(nn.Module):
-    """Parameter-free 2D RoPE matching the official JiT feature layout."""
+    """Parameter-free 2D RoPE with optional unrotated in-context prefixes."""
 
-    def __init__(self, head_dim: int, grid_size: int):
+    def __init__(self, head_dim: int, grid_size: int, prefix_tokens: int = 0):
         super().__init__()
         if head_dim % 4:
             raise ValueError("attention head dimension must be divisible by 4")
@@ -60,8 +60,12 @@ class RotaryEmbedding2D(nn.Module):
         angles_y = angles[:, None, :].expand(grid_size, grid_size, axis_dim)
         angles_x = angles[None, :, :].expand(grid_size, grid_size, axis_dim)
         angles_2d = torch.cat((angles_y, angles_x), dim=-1).reshape(-1, head_dim)
-        self.register_buffer("cos", angles_2d.cos()[None, None], persistent=False)
-        self.register_buffer("sin", angles_2d.sin()[None, None], persistent=False)
+        cos, sin = angles_2d.cos(), angles_2d.sin()
+        if prefix_tokens:
+            cos = torch.cat((torch.ones(prefix_tokens, head_dim), cos), dim=0)
+            sin = torch.cat((torch.zeros(prefix_tokens, head_dim), sin), dim=0)
+        self.register_buffer("cos", cos[None, None], persistent=False)
+        self.register_buffer("sin", sin[None, None], persistent=False)
 
     def forward(self, x):
         return x * self.cos.to(x.dtype) + rotate_half(x) * self.sin.to(x.dtype)
@@ -192,7 +196,7 @@ class ResidualRefinementHead(nn.Module):
 
 
 class PolarJiT(nn.Module):
-    """JiT-B/16 backbone with spatial and global S0 conditioning."""
+    """JiT-H/16 backbone with spatial and global S0 conditioning."""
 
     def __init__(
         self,
@@ -200,11 +204,13 @@ class PolarJiT(nn.Module):
         patch_size=16,
         target_channels=6,
         condition_channels=3,
-        hidden_size=768,
-        depth=12,
-        num_heads=12,
+        hidden_size=1280,
+        depth=32,
+        num_heads=16,
         mlp_ratio=4.0,
-        bottleneck_dim=128,
+        bottleneck_dim=256,
+        in_context_len=32,
+        in_context_start=10,
         refiner_hidden_channels=64,
         attn_dropout=0.0,
         proj_dropout=0.0,
@@ -217,6 +223,10 @@ class PolarJiT(nn.Module):
         self.image_size = image_size
         self.patch_size = patch_size
         self.out_channels = target_channels
+        self.in_context_len = int(in_context_len)
+        self.in_context_start = int(in_context_start)
+        if self.in_context_len < 0 or self.in_context_start < 0:
+            raise ValueError("in-context length and start must be non-negative")
         self.x_embedder = BottleneckPatchEmbed(
             target_channels, hidden_size, patch_size, bottleneck_dim
         )
@@ -228,6 +238,14 @@ class PolarJiT(nn.Module):
             sincos_2d(hidden_size, grid, grid), requires_grad=False
         )
         self.rope = RotaryEmbedding2D(hidden_size // num_heads, grid)
+        self.rope_incontext = RotaryEmbedding2D(
+            hidden_size // num_heads, grid, prefix_tokens=self.in_context_len
+        )
+        self.in_context_posemb = (
+            nn.Parameter(torch.zeros(1, self.in_context_len, hidden_size))
+            if self.in_context_len > 0
+            else None
+        )
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.condition_pool = nn.Sequential(
             RMSNorm(hidden_size), nn.Linear(hidden_size, hidden_size)
@@ -258,6 +276,8 @@ class PolarJiT(nn.Module):
                     nn.init.zeros_(module.bias)
 
         self.apply(initialize)
+        if self.in_context_posemb is not None:
+            nn.init.normal_(self.in_context_posemb, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
         for block in self.blocks:
@@ -288,10 +308,19 @@ class PolarJiT(nn.Module):
             raise ValueError(f"expected spatial size {expected}")
         condition_tokens = self.s0_embedder(s0)
         x = self.x_embedder(x_t) + condition_tokens + self.pos_embed.to(x_t.dtype)
-        condition = self.t_embedder(t)
-        condition = condition + self.condition_pool(condition_tokens.mean(dim=1))
-        for block in self.blocks:
-            x = block(x, condition, self.rope)
+        s0_global = self.condition_pool(condition_tokens.mean(dim=1))
+        condition = self.t_embedder(t) + s0_global
+        inserted_context = False
+        for index, block in enumerate(self.blocks):
+            if self.in_context_len > 0 and index == self.in_context_start:
+                context = s0_global[:, None].expand(-1, self.in_context_len, -1)
+                context = context + self.in_context_posemb.to(context.dtype)
+                x = torch.cat((context, x), dim=1)
+                inserted_context = True
+            rope = self.rope_incontext if inserted_context else self.rope
+            x = block(x, condition, rope)
+        if inserted_context:
+            x = x[:, self.in_context_len :]
         clean = self.unpatchify(self.final_layer(x, condition))
         clean = self.refiner(clean, s0)
         return {"clean": clean}

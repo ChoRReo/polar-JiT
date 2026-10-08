@@ -1,0 +1,16 @@
+from __future__ import annotations
+
+import torch
+
+
+def ratio_dolp_aop(s12: torch.Tensor, s0: torch.Tensor, eps: float = 1e-6):
+    """Compute DoLP/AoP from RGB [S1/S0,S2/S0] tensors."""
+    if s12.ndim != 4 or s12.shape[1] != 6:
+        raise ValueError(f"expected [B,6,H,W], got {tuple(s12.shape)}")
+    if s0.ndim != 4 or s0.shape[1] != 3 or s0.shape[0] != s12.shape[0]:
+        raise ValueError(f"expected matching S0 [B,3,H,W], got {tuple(s0.shape)}")
+    if s0.shape[-2:] != s12.shape[-2:]:
+        raise ValueError("S0 and S1/S0,S2/S0 must have the same spatial size")
+    s1, s2 = s12[:, :3].float(), s12[:, 3:].float()
+    amplitude = torch.sqrt(s1.square() + s2.square() + eps**2)
+    return amplitude.clamp(0, 1), 0.5 * torch.atan2(s2, s1)

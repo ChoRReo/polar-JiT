@@ -11,8 +11,16 @@ from polar_jit.metrics import aop_metrics, masked_mae, masked_psnr, masked_ssim
 
 
 def test_model_and_flow_cpu():
-    model = PolarJiT(image_size=32, patch_size=8, hidden_size=64, depth=2, num_heads=4,
-                     bottleneck_dim=16)
+    model = PolarJiT(
+        image_size=32,
+        patch_size=8,
+        hidden_size=64,
+        depth=2,
+        num_heads=4,
+        bottleneck_dim=16,
+        in_context_len=2,
+        in_context_start=1,
+    )
     flow = ConditionalFlowMatcher(model)
     s0, target = torch.randn(2, 3, 32, 32), torch.randn(2, 6, 32, 32).clamp(-1, 1)
     pred, velocity, velocity_target, _ = flow(target, s0)
@@ -37,7 +45,7 @@ def test_refiner_starts_as_identity():
 
 
 def test_stokes_dolp_aop():
-    s0 = torch.full((1, 3, 4, 4), -0.5)  # network S0=-0.5 means physical S0=0.5
+    s0 = torch.full((1, 3, 4, 4), -0.5)
     s12 = torch.zeros(1, 6, 4, 4)
     s12[:, :3] = 0.25
     dolp, aop = s12_dolp_aop(s12, s0)

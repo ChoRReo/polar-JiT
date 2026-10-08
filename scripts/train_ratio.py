@@ -18,10 +18,11 @@ from torch.utils.data import DataLoader
 from polar_jit import (
     ConditionalFlowMatcher,
     PolarJiT,
-    build_dataset,
     load_official_jit_h16,
 )
-from polar_jit.losses import generation_weights, masked_mean, reconstruction_losses
+from polar_jit.losses import generation_weights, masked_mean
+from polar_jit.ratio_data import build_ratio_dataset
+from polar_jit.ratio_losses import reconstruction_losses_ratio
 
 
 def write_train_log(path: Path, run_id: str, payload: dict):
@@ -53,7 +54,7 @@ def require_finite_losses(log_path, run_id, step, losses):
     raise FloatingPointError(f"non-finite training loss at step {step}: {nonfinite}")
 
 
-def main(default_config="configs/polar_jit_h16.yaml", condition_key="s0"):
+def main(default_config="configs/polar_jit_h16_ratio.yaml", condition_key="s0"):
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=default_config)
     parser.add_argument("--device", default="cuda")
@@ -72,7 +73,7 @@ def main(default_config="configs/polar_jit_h16.yaml", condition_key="s0"):
     log_path.parent.mkdir(parents=True, exist_ok=True)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
 
-    dataset = build_dataset(config)
+    dataset = build_ratio_dataset(config)
     loader = DataLoader(
         dataset,
         batch_size=train_cfg["batch_size"],
@@ -170,7 +171,7 @@ def main(default_config="configs/polar_jit_h16.yaml", condition_key="s0"):
             spatial_weights = generation_weights(batch["mask"])
             loss_flow = masked_mean((v_pred - v_target).square(), spatial_weights)
             clean_l1, gradient_l1, frequency_l1, dolp_l1, aop_l1 = (
-                reconstruction_losses(
+                reconstruction_losses_ratio(
                     pred["clean"],
                     target,
                     batch["s0"],
